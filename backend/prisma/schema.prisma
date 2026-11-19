@@ -1,0 +1,422 @@
+// ToolkitGo technician registration & KYC schema (MySQL).
+//
+// Design notes
+// - Sensitive identifiers (Aadhaar, PAN, bank account) are stored only as
+//   AES-256-GCM ciphertext plus a masked display value and a keyed HMAC
+//   "blind index" used for duplicate detection. Plaintext never hits the DB.
+// - Every verification has its own independent status. The application-level
+//   KycStatus is never derived from a single verification.
+// - Aadhaar address and current residential address are separate tables.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums ----
+
+enum KycStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+  UNDER_REVIEW
+  ACTION_REQUIRED
+  APPROVED
+  REJECTED
+}
+
+enum DocumentStatus {
+  NOT_UPLOADED
+  UPLOADED
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+  REUPLOAD_REQUIRED
+}
+
+enum VerificationStatus {
+  PENDING
+  IN_PROGRESS
+  VERIFIED
+  FAILED
+  MANUAL_REVIEW
+  UNAVAILABLE
+}
+
+enum AadhaarAddressStatus {
+  PENDING
+  VERIFIED
+  UNVERIFIED
+  REJECTED
+  UNAVAILABLE
+}
+
+enum CurrentAddressStatus {
+  SELF_DECLARED
+  DOCUMENT_SUPPORTED
+  MANUALLY_VERIFIED
+  REJECTED
+}
+
+enum AddressSource {
+  VERIFICATION_PROVIDER // populated from an authorised verification result
+  SELF_DECLARED // typed by the technician (unverified)
+  COPIED_FROM_AADHAAR // current address copied via "same address" option
+}
+
+enum VerificationMethod {
+  PROVIDER // authorised third-party verification API
+  OFFLINE_EKYC // UIDAI offline e-KYC (XML / Secure QR) validated by provider
+  MANUAL // documented manual review by authorised staff
+  DIGILOCKER // documents fetched with the citizen's consent from DigiLocker (MeitY)
+}
+
+enum DocumentCategory {
+  AADHAAR
+  PAN
+  PROFILE_PHOTO
+  ADDRESS_PROOF
+  BANK_PROOF
+  CERTIFICATE
+  OTHER
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED // no scanner configured
+  ERROR
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum AdminRole {
+  SUPER_ADMIN // manages staff + everything ADMIN can do
+  ADMIN // final approve / reject / activate
+  REVIEWER // office staff: verify documents & sections, request changes
+}
+
+enum ActorType {
+  TECHNICIAN
+  ADMIN
+  SYSTEM
+}
+
+enum KycSection {
+  MOBILE
+  PERSONAL
+  AADHAAR
+  PAN
+  ADDRESS
+  DOCUMENTS
+  BANK
+  GENERAL
+}
+
+// --------------------------------------------------------------- models ----
+
+model Technician {
+  id                 String             @id @default(cuid())
+  phone              String             @unique @db.VarChar(15) // E.164 without '+', e.g. 919876543210
+  countryCode        String             @default("+91") @db.VarChar(5)
+  mobileVerification VerificationStatus @default(PENDING)
+  phoneVerifiedAt    DateTime?
+  // Set when the technician signs in via Supabase Auth phone OTP
+  supabaseUserId     String?            @unique @db.VarChar(64)
+
+  // Personal information
+  fullName         String?   @db.VarChar(150)
+  dateOfBirth      DateTime? @db.Date
+  gender           Gender?
+  email            String?   @db.VarChar(190)
+  emergencyContact String?   @db.VarChar(15)
+
+  // Address linkage
+  addressesSame Boolean @default(false)
+
+  // Policy flags an admin can raise per technician (e.g. addresses differ)
+  addressProofRequested Boolean @default(false)
+
+  // Application lifecycle
+  kycStatus       KycStatus @default(NOT_STARTED)
+  submittedAt     DateTime?
+  reviewStartedAt DateTime?
+  reviewedAt      DateTime?
+  reviewedById    String?
+  rejectionReason String?   @db.Text
+  submissionCount Int       @default(0)
+
+  // Activation (only possible after APPROVED)
+  isActive    Boolean   @default(false)
+  activatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reviewedBy     AdminUser?      @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  aadhaar        AadhaarDetail?
+  pan            PanDetail?
+  aadhaarAddress AadhaarAddress?
+  currentAddress CurrentAddress?
+  bank           BankDetail?
+  documents      Document[]
+  feedback       KycFeedback[]
+  auditLogs      AuditLog[]
+
+  @@index([kycStatus, updatedAt])
+  @@index([isActive])
+}
+
+model AadhaarDetail {
+  id           String @id @default(cuid())
+  technicianId String @unique
+
+  // Identifier storage: last4 always; ciphertext only when policy allows.
+  aadhaarLast4     String? @db.VarChar(4)
+  aadhaarHash      String? @db.VarChar(64) // HMAC blind index for duplicate detection
+  aadhaarEncrypted String? @db.Text
+
+  nameOnAadhaar String?   @db.VarChar(150)
+  dobOnAadhaar  DateTime? @db.Date
+
+  // Consent (mandatory before any Aadhaar processing)
+  consentGiven   Boolean   @default(false)
+  consentVersion String?   @db.VarChar(20)
+  consentAt      DateTime?
+  consentIp      String?   @db.VarChar(64)
+
+  verificationStatus VerificationStatus  @default(PENDING)
+  verificationMethod VerificationMethod?
+  providerName       String?             @db.VarChar(50)
+  providerRefId      String?             @db.VarChar(120)
+  verifiedAt         DateTime?
+  nameMatchScore     Float?
+  nameMatched        Boolean?
+  dobMatched         Boolean?
+  failureReason      String?             @db.VarChar(500)
+  reviewNote         String?             @db.Text
+  reviewedById       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@index([aadhaarHash])
+}
+
+model PanDetail {
+  id           String @id @default(cuid())
+  technicianId String @unique
+
+  panEncrypted String? @db.Text
+  panHash      String? @db.VarChar(64)
+  panMasked    String? @db.VarChar(10)
+  holderName   String? @db.VarChar(150)
+
+  verificationStatus VerificationStatus  @default(PENDING)
+  verificationMethod VerificationMethod?
+  providerName       String?             @db.VarChar(50)
+  providerRefId      String?             @db.VarChar(120)
+  verifiedAt         DateTime?
+  nameMatchScore     Float?
+  nameMatched        Boolean?
+  failureReason      String?             @db.VarChar(500)
+  reviewNote         String?             @db.Text
+  reviewedById       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@index([panHash])
+}
+
+model AadhaarAddress {
+  id           String @id @default(cuid())
+  technicianId String @unique
+
+  houseNumber  String? @db.VarChar(100)
+  buildingName String? @db.VarChar(150)
+  street       String? @db.VarChar(150)
+  locality     String? @db.VarChar(150)
+  villageCity  String  @db.VarChar(100)
+  mandalTaluka String? @db.VarChar(100)
+  district     String  @db.VarChar(100)
+  state        String  @db.VarChar(60)
+  pinCode      String  @db.VarChar(6)
+  country      String  @default("India") @db.VarChar(60)
+
+  source             AddressSource        @default(SELF_DECLARED)
+  verificationStatus AadhaarAddressStatus @default(UNVERIFIED)
+  reviewNote         String?              @db.Text
+  reviewedById       String?
+  verifiedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+}
+
+model CurrentAddress {
+  id           String @id @default(cuid())
+  technicianId String @unique
+
+  houseNumber  String? @db.VarChar(100)
+  buildingName String? @db.VarChar(150)
+  street       String? @db.VarChar(150)
+  locality     String? @db.VarChar(150)
+  villageCity  String  @db.VarChar(100)
+  mandalTaluka String? @db.VarChar(100)
+  district     String  @db.VarChar(100)
+  state        String  @db.VarChar(60)
+  pinCode      String  @db.VarChar(6)
+  country      String  @default("India") @db.VarChar(60)
+  landmark     String? @db.VarChar(150)
+
+  source             AddressSource        @default(SELF_DECLARED)
+  verificationStatus CurrentAddressStatus @default(SELF_DECLARED)
+  reviewNote         String?              @db.Text
+  reviewedById       String?
+  verifiedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+}
+
+model BankDetail {
+  id           String @id @default(cuid())
+  technicianId String @unique
+
+  accountHolderName String  @db.VarChar(150)
+  accountEncrypted  String  @db.Text
+  accountLast4      String  @db.VarChar(4)
+  accountHash       String  @db.VarChar(64)
+  ifsc              String  @db.VarChar(11)
+  bankName          String  @db.VarChar(120)
+  branchName        String? @db.VarChar(120)
+
+  verificationStatus VerificationStatus  @default(PENDING)
+  verificationMethod VerificationMethod?
+  verifiedAt         DateTime?
+  reviewNote         String?             @db.Text
+  reviewedById       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@index([accountHash])
+}
+
+model Document {
+  id               String           @id @default(cuid())
+  technicianId     String
+  category         DocumentCategory
+  label            String?          @db.VarChar(120) // e.g. "ITI Electrician certificate"
+  status           DocumentStatus   @default(NOT_UPLOADED)
+  currentVersionId String?          @unique
+  rejectionReason  String?          @db.VarChar(500)
+  reviewedById     String?
+  reviewedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  technician     Technician        @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  currentVersion DocumentVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  versions       DocumentVersion[] @relation("Versions")
+
+  @@index([technicianId, category])
+  @@index([status])
+}
+
+model DocumentVersion {
+  id           String     @id @default(cuid())
+  documentId   String
+  version      Int
+  objectKey    String     @unique @db.VarChar(255) // randomised, never derived from user input
+  originalName String     @db.VarChar(255)
+  mimeType     String     @db.VarChar(100)
+  sizeBytes    Int
+  sha256       String     @db.Char(64)
+  scanStatus   ScanStatus @default(PENDING)
+  scanDetail   String?    @db.VarChar(255)
+  status       DocumentStatus @default(UPLOADED)
+  reviewNote   String?    @db.VarChar(500)
+  uploadedAt   DateTime   @default(now())
+  supersededAt DateTime?
+  purgedAt     DateTime? // object deleted by retention policy
+
+  document        Document  @relation("Versions", fields: [documentId], references: [id], onDelete: Cascade)
+  currentOf       Document? @relation("CurrentVersion")
+
+  @@unique([documentId, version])
+  @@index([supersededAt, purgedAt])
+}
+
+model KycFeedback {
+  id           String     @id @default(cuid())
+  technicianId String
+  section      KycSection
+  documentId   String?
+  message      String     @db.VarChar(1000)
+  resolved     Boolean    @default(false)
+  resolvedAt   DateTime?
+  createdById  String?
+  createdAt    DateTime   @default(now())
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  createdBy  AdminUser? @relation(fields: [createdById], references: [id])
+
+  @@index([technicianId, resolved])
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique @db.VarChar(190)
+  name         String    @db.VarChar(120)
+  passwordHash String    @db.VarChar(100)
+  role         AdminRole @default(REVIEWER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  reviewed Technician[]  @relation("ReviewedBy")
+  feedback KycFeedback[]
+}
+
+model AuditLog {
+  id           String    @id @default(cuid())
+  actorType    ActorType
+  actorId      String?   @db.VarChar(40)
+  technicianId String?
+  action       String    @db.VarChar(80)
+  entityType   String?   @db.VarChar(50)
+  entityId     String?   @db.VarChar(40)
+  metadata     Json?
+  ip           String?   @db.VarChar(64)
+  createdAt    DateTime  @default(now())
+
+  technician Technician? @relation(fields: [technicianId], references: [id], onDelete: SetNull)
+
+  @@index([technicianId, createdAt])
+  @@index([actorType, actorId])
+  @@index([action])
+}

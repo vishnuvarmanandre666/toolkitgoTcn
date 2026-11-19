@@ -1,0 +1,53 @@
+# Local development infrastructure for ToolkitGo technician KYC.
+# Production should use managed MySQL / Redis / S3 with private buckets.
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: toolkitgo-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: toolkitgo
+      MYSQL_USER: toolkitgo
+      MYSQL_PASSWORD: toolkitgo
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql-init.sql:/docker-entrypoint-initdb.d/01-grants.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: toolkitgo-redis
+    command: ["redis-server", "--requirepass", "redispass", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redispass", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # S3-compatible private object storage for local development.
+  # Only the authenticated backend identity in infra/seaweedfs-s3.json can access it;
+  # there is no anonymous access. Use AWS S3 (private bucket) or similar in production.
+  s3:
+    image: chrislusf/seaweedfs:3.80
+    container_name: toolkitgo-s3
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-volume.max=100", "-master.volumeSizeLimitMB=64", "-master.volumePreallocate=false"]
+    ports:
+      - "8333:8333"
+    volumes:
+      - s3_data:/data
+      - ./infra/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+
+volumes:
+  mysql_data:
+  redis_data:
+  s3_data:

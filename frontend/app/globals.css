@@ -1,0 +1,162 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-ink-50 text-ink-800 antialiased;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2;
+  }
+}
+
+@layer components {
+  .input {
+    @apply block w-full rounded-lg border border-ink-300 bg-white px-3 py-2.5 text-[15px] text-ink-900 shadow-sm placeholder:text-ink-400
+      focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-500;
+  }
+  .input-error {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-500/30;
+  }
+  .card {
+    @apply rounded-2xl border border-ink-200 bg-white shadow-card;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
+  }
+
+  /* ---------------------------------------------------- splash screen --- */
+  .tg-splash {
+    @apply fixed inset-0 z-[100] flex cursor-pointer items-center justify-center overflow-hidden bg-logo-navy;
+    transition: opacity 450ms ease, visibility 450ms ease;
+  }
+  .tg-splash--hide {
+    opacity: 0;
+    visibility: hidden;
+  }
+  html[data-splash-seen] .tg-splash {
+    display: none;
+  }
+  .tg-splash__glow {
+    @apply absolute h-[36rem] w-[36rem] rounded-full;
+    background: radial-gradient(circle, rgba(249, 115, 22, 0.35) 0%, rgba(249, 115, 22, 0) 65%);
+    animation: tg-glow 1.6s ease-out both;
+  }
+  .tg-splash__mark {
+    @apply grid h-24 w-24 place-items-center rounded-3xl bg-brand-600 text-white shadow-2xl;
+    box-shadow: 0 20px 60px -10px rgba(234, 88, 12, 0.6);
+    animation: tg-pop 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  .tg-splash__mark svg {
+    animation: tg-turn 900ms 250ms ease-in-out both;
+  }
+  .tg-splash__word {
+    animation: tg-rise 650ms 150ms ease-out both;
+  }
+  /* speed lines whoosh in from the left after the wordmark appears */
+  .tg-speed {
+    transform-origin: right center;
+    animation: tg-whoosh 600ms 550ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .tg-splash__tag {
+    @apply mt-2 text-sm font-medium tracking-wide text-ink-300 sm:text-base;
+    animation: tg-rise 600ms 550ms ease-out both;
+  }
+  .tg-splash__bar {
+    @apply mt-8 h-1 w-40 overflow-hidden rounded-full bg-white/10;
+    animation: tg-rise 400ms 650ms ease-out both;
+  }
+  .tg-splash__bar span {
+    @apply block h-full rounded-full bg-brand-500;
+    animation: tg-load 900ms 700ms ease-in-out both;
+  }
+}
+
+@keyframes tg-pop {
+  from { opacity: 0; transform: scale(0.4) rotate(-12deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+@keyframes tg-turn {
+  0% { transform: rotate(0); }
+  40% { transform: rotate(-25deg); }
+  70% { transform: rotate(10deg); }
+  100% { transform: rotate(0); }
+}
+@keyframes tg-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes tg-whoosh {
+  from { opacity: 0; transform: translateX(-1.2em) scaleX(1.6); }
+  to { opacity: 1; transform: translateX(0) scaleX(1); }
+}
+@keyframes tg-load {
+  from { width: 0; }
+  to { width: 100%; }
+}
+@keyframes tg-glow {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tg-splash *,
+  .tg-splash {
+    animation: none !important;
+  }
+  .tg-splash__bar span {
+    width: 100%;
+  }
+}
+
+
+/* ------------------------------------------------- page & UI motion --- */
+@keyframes tg-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes tg-toast-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes tg-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.35); }
+  100% { box-shadow: 0 0 0 10px rgba(234, 88, 12, 0); }
+}
+.tg-enter {
+  animation: tg-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.tg-toast {
+  animation: tg-toast-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.tg-stagger > * {
+  animation: tg-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.tg-stagger > *:nth-child(2) { animation-delay: 60ms; }
+.tg-stagger > *:nth-child(3) { animation-delay: 120ms; }
+.tg-stagger > *:nth-child(4) { animation-delay: 180ms; }
+.tg-stagger > *:nth-child(5) { animation-delay: 240ms; }
+.tg-stagger > *:nth-child(6) { animation-delay: 300ms; }
+.tg-stagger > *:nth-child(7) { animation-delay: 360ms; }
+.tg-stagger > *:nth-child(8) { animation-delay: 420ms; }
+.tg-pulse {
+  animation: tg-pulse-ring 1.6s ease-out infinite;
+}
+
+/* Users who ask for reduced motion get instant transitions. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .tg-enter,
+  .tg-toast,
+  .tg-stagger > *,
+  .tg-pulse {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "toolkitgo-backend",
+      "credentials": [{ "accessKey": "toolkitgo-dev-key", "secretKey": "toolkitgo-dev-secret-123" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
